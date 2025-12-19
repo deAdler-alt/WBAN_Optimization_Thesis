@@ -1,47 +1,68 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-from mealpy.evolutionary_based import GA
-from mealpy.swarm_based import PSO
 from mealpy import FloatVar
+
+# --- IMPORTY ALGORYTMÓW (2 Ewolucyjne + 2 Rojowe) ---
+from mealpy.evolutionary_based import GA, DE    # Genetyczny + Różnicowy
+from mealpy.swarm_based import PSO, GWO         # Cząsteczki + Szare Wilki
 
 from src.fitness import WBANOptimizationProblem, FIXED_SENSORS
 from src.body_model import BodyModel
 
-# --- KONFIGURACJA STYLU IEEE (Formalny, czarno-biały/szary) ---
+# ==============================================================================
+# KONFIGURACJA STYLU IEEE (Publikacja Naukowa)
+# ==============================================================================
 plt.rcParams.update({
     'font.family': 'serif',
-    'font.size': 10,
-    'axes.labelsize': 11,
-    'axes.titlesize': 11,
+    'font.size': 11,
+    'axes.labelsize': 12,
+    'axes.titlesize': 12,
     'legend.fontsize': 9,
-    'xtick.labelsize': 9,
-    'ytick.labelsize': 9,
+    'xtick.labelsize': 10,
+    'ytick.labelsize': 10,
     'lines.linewidth': 1.5,
+    'lines.markersize': 6,
     'figure.dpi': 300,
-    'text.usetex': False # Jeśli masz LaTeX zainstalowany w systemie, zmień na True dla ładniejszych wzorów
+    'axes.grid': True,
+    'grid.linestyle': '--',
+    'grid.alpha': 0.5
 })
 
-def generate_random_sensors(n_sensors):
-    """Generuje N losowych sensorów na ciele (do testów skalowalności)."""
-    sensors = []
-    # Zawsze dodaj ECG i Hub-area (baza)
-    sensors.append(FIXED_SENSORS[0]) # ECG
+# Konfiguracja wizualna dla 4 algorytmów (Czarno-białe/Szare - bezpieczne do druku)
+ALGO_CONFIG = {
+    # Grupa Ewolucyjna
+    'GA':  {'color': 'black', 'marker': 's', 'linestyle': '--', 'label': 'GA (Genetic)'},      # Kwadrat, przerywana
+    'DE':  {'color': 'gray',  'marker': 'D', 'linestyle': '--', 'label': 'DE (Differential)'}, # Romb, przerywana
     
-    for i in range(n_sensors - 1):
+    # Grupa Rojowa
+    'PSO': {'color': 'black', 'marker': '^', 'linestyle': '-',  'label': 'PSO (Particle)'},    # Trójkąt, ciągła
+    'GWO': {'color': 'gray',  'marker': 'o', 'linestyle': '-',  'label': 'GWO (Grey Wolf)'}    # Kółko, ciągła
+}
+
+def generate_dynamic_sensors(n_sensors):
+    """Generuje losowy zestaw sensorów (zachowując bazowe medyczne)."""
+    sensors = []
+    base_sensors = FIXED_SENSORS[:min(len(FIXED_SENSORS), n_sensors)]
+    sensors.extend(base_sensors)
+    
+    while len(sensors) < n_sensors:
         pos = BodyModel.get_random_valid_position()
-        sensors.append({
-            'name': f'Rand_Sensor_{i}',
-            'pos': pos,
-            'data_rate': 100 # Standardowe dane
-        })
+        sensors.append({'name': f'S_{len(sensors)+1}', 'pos': pos, 'data_rate': 100})
     return sensors
 
-def run_convergence_comparison():
-    """EKSPERYMENT 1: Porównanie zbieżności GA vs PSO"""
-    print(">>> [Exp 1] Uruchamianie analizy zbieżności (GA vs PSO)...")
+def run_experiment_convergence():
+    """
+    EXP 1: Analiza Zbieżności (Szybkość uczenia się)
+    """
+    print("\n>>> [EXP 1] Analiza Zbieżności (GA/DE vs PSO/GWO)...")
     
-    problem = WBANOptimizationProblem(n_relays=2)
+    # Parametry symulacji
+    EPOCHS = 60
+    POP_SIZE = 30
+    N_RELAYS = 2
+    
+    problem = WBANOptimizationProblem(n_relays=N_RELAYS)
     problem_dict = {
         "obj_func": problem.fitness_function,
         "bounds": FloatVar(lb=problem.lb, ub=problem.ub),
@@ -49,50 +70,62 @@ def run_convergence_comparison():
         "log_to": None
     }
     
-    EPOCHS = 50
-    POP_SIZE = 30
+    # Słownik na modele
+    models = {
+        'GA':  GA.BaseGA(epoch=EPOCHS, pop_size=POP_SIZE),
+        'DE':  DE.OriginalDE(epoch=EPOCHS, pop_size=POP_SIZE), # Differential Evolution
+        'PSO': PSO.OriginalPSO(epoch=EPOCHS, pop_size=POP_SIZE),
+        'GWO': GWO.OriginalGWO(epoch=EPOCHS, pop_size=POP_SIZE) # Grey Wolf Optimizer
+    }
     
-    # 1. PSO
-    model_pso = PSO.OriginalPSO(epoch=EPOCHS, pop_size=POP_SIZE)
-    model_pso.solve(problem_dict)
-    fit_pso = model_pso.history.list_global_best_fit
-    
-    # 2. GA
-    model_ga = GA.BaseGA(epoch=EPOCHS, pop_size=POP_SIZE)
-    model_ga.solve(problem_dict)
-    fit_ga = model_ga.history.list_global_best_fit
-    
-    # Rysowanie Wykresu
-    epochs = range(1, len(fit_pso) + 1)
-    plt.figure(figsize=(7, 5))
-    
-    plt.plot(epochs, fit_pso, marker='o', markevery=5, linestyle='-', color='black', label='PSO')
-    plt.plot(epochs, fit_ga, marker='s', markevery=5, linestyle='--', color='gray', label='GA')
-    
-    plt.xlabel('Iteration (Epoch)')
-    plt.ylabel('Cost Function Value (Fitness)')
-    plt.title('Convergence Analysis: GA vs PSO')
-    plt.legend()
-    plt.grid(True, linestyle=':', alpha=0.6)
-    plt.tight_layout()
-    plt.savefig('IEEE_Exp1_Convergence.png')
-    print("   -> Zapisano: IEEE_Exp1_Convergence.png")
+    # Uruchamianie pętli
+    for name, model in models.items():
+        print(f"    Running {name}...")
+        model.solve(problem_dict)
 
-def run_scalability_test():
-    """EKSPERYMENT 2: Zużycie energii vs Liczba sensorów"""
-    print("\n>>> [Exp 2] Uruchamianie testu skalowalności (Energy vs Sensors)...")
+    # Rysowanie
+    plt.figure(figsize=(8, 6))
+    x_epochs = range(1, EPOCHS + 1)
     
-    sensor_counts = [4, 8, 12, 16, 20]
-    results_pso = []
-    results_ga = []
+    for name, model in models.items():
+        cfg = ALGO_CONFIG[name]
+        # Wybieramy global best fitness z historii
+        y_history = model.history.list_global_best_fit
+        
+        plt.plot(x_epochs, y_history, 
+                 color=cfg['color'], marker=cfg['marker'], linestyle=cfg['linestyle'], 
+                 label=cfg['label'], markevery=5) # Markery co 5, żeby nie zamazać
+    
+    plt.xlabel('Iterations (Epochs)')
+    plt.ylabel('Cost Function Value (Fitness)')
+    plt.title('Convergence Analysis: Evolutionary vs Swarm')
+    plt.legend()
+    plt.tight_layout()
+    
+    filename = 'FIG_1_Convergence_4Algos.png'
+    plt.savefig(filename)
+    print(f"    [SAVED] {filename}")
+
+def run_experiment_scalability():
+    """
+    EXP 2: Analiza Skalowalności (Wpływ liczby sensorów)
+    """
+    print("\n>>> [EXP 2] Analiza Skalowalności (Energy vs Sensors)...")
+    
+    sensor_counts = [5, 10, 15, 20]
+    results = {name: [] for name in ALGO_CONFIG.keys()}
+    
+    # Lżejsze ustawienia do pętli
+    EPOCHS = 30
+    POP_SIZE = 20
+    N_RELAYS = 2
     
     for n in sensor_counts:
-        print(f"   -> Symulacja dla {n} sensorów...")
+        print(f"    Simulating network size: {n} nodes...")
+        current_sensors = generate_dynamic_sensors(n)
         
-        # Generuj losowe sensory (taki sam zestaw dla obu algorytmów)
-        current_sensors = generate_random_sensors(n)
-        problem = WBANOptimizationProblem(n_relays=2, custom_sensors=current_sensors)
-        
+        # Tworzymy problem z nowym zestawem sensorów
+        problem = WBANOptimizationProblem(n_relays=N_RELAYS, custom_sensors=current_sensors)
         problem_dict = {
             "obj_func": problem.fitness_function,
             "bounds": FloatVar(lb=problem.lb, ub=problem.ub),
@@ -100,32 +133,38 @@ def run_scalability_test():
             "log_to": None
         }
         
-        # PSO
-        model_pso = PSO.OriginalPSO(epoch=30, pop_size=20) # Mniej epok dla szybkości
-        res_pso = model_pso.solve(problem_dict)
-        results_pso.append(res_pso.target.fitness)
+        # Definicja modeli wewnątrz pętli (muszą być świeże dla każdego n)
+        models = {
+            'GA':  GA.BaseGA(epoch=EPOCHS, pop_size=POP_SIZE),
+            'DE':  DE.OriginalDE(epoch=EPOCHS, pop_size=POP_SIZE),
+            'PSO': PSO.OriginalPSO(epoch=EPOCHS, pop_size=POP_SIZE),
+            'GWO': GWO.OriginalGWO(epoch=EPOCHS, pop_size=POP_SIZE)
+        }
         
-        # GA
-        model_ga = GA.BaseGA(epoch=30, pop_size=20)
-        res_ga = model_ga.solve(problem_dict)
-        results_ga.append(res_ga.target.fitness)
+        for name, model in models.items():
+            res = model.solve(problem_dict)
+            results[name].append(res.target.fitness)
+
+    # Rysowanie
+    plt.figure(figsize=(8, 6))
     
-    # Rysowanie Wykresu
-    plt.figure(figsize=(7, 5))
+    for name, vals in results.items():
+        cfg = ALGO_CONFIG[name]
+        plt.plot(sensor_counts, vals, 
+                 color=cfg['color'], marker=cfg['marker'], linestyle=cfg['linestyle'], 
+                 label=cfg['label'])
     
-    plt.plot(sensor_counts, results_pso, marker='^', linestyle='-', color='black', label='PSO')
-    plt.plot(sensor_counts, results_ga, marker='D', linestyle='--', color='gray', label='GA')
-    
-    plt.xlabel('Number of Sensors')
-    plt.ylabel('Total Network Cost (Weighted Fitness)')
-    plt.title('Scalability Analysis: Impact of Sensor Density')
+    plt.xlabel('Number of Sensor Nodes')
+    plt.ylabel('Total Network Cost (Normalized)')
+    plt.title('Scalability Analysis: Network Size Impact')
     plt.xticks(sensor_counts)
     plt.legend()
-    plt.grid(True, linestyle=':', alpha=0.6)
     plt.tight_layout()
-    plt.savefig('IEEE_Exp2_Scalability.png')
-    print("   -> Zapisano: IEEE_Exp2_Scalability.png")
+    
+    filename = 'FIG_2_Scalability_4Algos.png'
+    plt.savefig(filename)
+    print(f"    [SAVED] {filename}")
 
 if __name__ == "__main__":
-    run_convergence_comparison()
-    run_scalability_test()
+    run_experiment_convergence()
+    run_experiment_scalability()
