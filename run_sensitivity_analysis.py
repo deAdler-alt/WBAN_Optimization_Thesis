@@ -2,24 +2,27 @@ import numpy as np
 import pandas as pd
 import time
 from mealpy import FloatVar
-# --- IMPORTY ALGORYTMÓW (TYLKO 3 ZATWIERDZONE) ---
+# TYLKO 3 ALGORYTMY (Bez DE)
 from mealpy.evolutionary_based import GA
 from mealpy.swarm_based import PSO, GWO
 
-# Importy lokalne
 from src.fitness import WBANOptimizationProblem, FIXED_SENSORS
 from src.body_model import BodyModel
 
 # ==============================================================================
-# 1. KONFIGURACJA EKSPERYMENTU
+# 1. KONFIGURACJA PACZEK (ZASOBÓW)
 # ==============================================================================
-SCENARIOS_SENSORS = [6, 8, 10, 12, 15, 20] # Scenariusze: Liczba sensorów
-N_RELAYS = 2            # Liczba klastrów
-N_TRIALS = 30           # Liczba powtórzeń (Statystyka)
-EPOCH = 50              # Liczba iteracji
-POP_SIZE = 30           # Wielkość populacji
+CONFIG_PACKS = {
+    'A_Eco':      {'epoch': 15,  'pop_size': 10},  # Słaby sprzęt
+    'B_Standard': {'epoch': 50,  'pop_size': 30},  # Standard
+    'C_High':     {'epoch': 100, 'pop_size': 50}   # Mocny sprzęt
+}
 
-# Słownik Algorytmów - TYLKO GA, PSO, GWO
+# Stały, trudny scenariusz
+SCENARIO_SENSORS = 15
+N_RELAYS = 2
+N_TRIALS = 30
+
 ALGORITHMS = {
     'GA':  GA.BaseGA,
     'PSO': PSO.OriginalPSO,
@@ -27,38 +30,33 @@ ALGORITHMS = {
 }
 
 # ==============================================================================
-# 2. GENERATOR ROZMIESZCZENIA SENSORÓW
+# 2. GENERATOR
 # ==============================================================================
 def get_sensor_placement(n_sensors, seed=42):
-    np.random.seed(seed)
+    np.random.seed(seed) 
     sensors = []
-    # Kopiujemy bazowe sensory
     base = [s.copy() for s in FIXED_SENSORS[:min(len(FIXED_SENSORS), n_sensors)]]
     sensors.extend(base)
-    # Dolosowujemy resztę
     while len(sensors) < n_sensors:
         pos = BodyModel.get_random_valid_position()
         sensors.append({'name': f'S_{len(sensors)}', 'pos': pos, 'data_rate': 100})
     return sensors
 
 # ==============================================================================
-# 3. GŁÓWNA PĘTLA BADANIA
+# 3. SILNIK TESTOWY
 # ==============================================================================
-def run_experiment():
+def run_sensitivity_study():
     print("============================================================")
-    print("   ROZPOCZYNAM BADANIE SKALOWALNOŚCI WBAN (FIXED)")
-    print(f"   Algorytmy: {list(ALGORITHMS.keys())}")
-    print(f"   Scenariusze: {SCENARIOS_SENSORS}")
-    print(f"   Konfig: {N_TRIALS} prób, {EPOCH} epok, {POP_SIZE} pop.")
+    print("   ANALIZA WRAŻLIWOŚCI (SENSITIVITY) - GOLD MASTER")
     print("============================================================")
     
+    fixed_sensors = get_sensor_placement(SCENARIO_SENSORS, seed=SCENARIO_SENSORS)
     results_db = []
 
-    for n_sensors in SCENARIOS_SENSORS:
-        print(f"\n>>> SCENARIUSZ: {n_sensors} SENSORÓW")
-        current_sensors = get_sensor_placement(n_sensors, seed=n_sensors)
+    for pack_name, params in CONFIG_PACKS.items():
+        print(f"\n>>> PACZKA: {pack_name} {params}")
         
-        problem = WBANOptimizationProblem(n_relays=N_RELAYS, custom_sensors=current_sensors)
+        problem = WBANOptimizationProblem(n_relays=N_RELAYS, custom_sensors=fixed_sensors)
         problem_dict = {
             "obj_func": problem.fitness_function,
             "bounds": FloatVar(lb=problem.lb, ub=problem.ub),
@@ -67,42 +65,32 @@ def run_experiment():
         }
 
         for algo_name, algo_class in ALGORITHMS.items():
-            print(f"   [{algo_name}] Liczenie {N_TRIALS} powtórzeń... ", end="", flush=True)
-            start_time = time.time()
+            print(f"   [{algo_name}] ... ", end="", flush=True)
             
             for i in range(N_TRIALS):
-                model = algo_class(epoch=EPOCH, pop_size=POP_SIZE)
+                model = algo_class(epoch=params['epoch'], pop_size=params['pop_size'])
                 
                 t0 = time.time()
                 res = model.solve(problem_dict)
                 t_exec = time.time() - t0
                 
-                metrics = problem.get_metrics_details(res.solution)
+                # Zapisujemy wynik
+                # Fitness < 100 uznajemy za sukces (brak kary 1000)
+                is_success = res.target.fitness < 100.0
                 
-                # ZAPISUJEMY TYLKO TO, CO JEST POTRZEBNE DO WYKRESÓW
-                # Usunąłem 'Network_Load_Std', które powodowało błąd
                 results_db.append({
-                    'Scenario_Sensors': n_sensors,
+                    'Config_Pack': pack_name,
                     'Algorithm': algo_name,
-                    'Trial_ID': i + 1,
                     'Fitness_Cost': res.target.fitness,
                     'Execution_Time_s': t_exec,
-                    'Energy_Total_J': metrics['Energy'],
-                    'Avg_Delay_s': metrics['Delay'] / n_sensors,
-                    'Min_Link_Margin_dB': metrics['Quality']
+                    'Is_Success': is_success
                 })
-            
-            duration = time.time() - start_time
-            print(f"Gotowe ({duration:.1f}s)")
+            print("Gotowe")
 
-    # ZAPIS
+    # Zapis
     df = pd.DataFrame(results_db)
-    filename = "WBAN_Experiment_Results.csv"
-    df.to_csv(filename, index=False)
-    
-    print("\n" + "="*60)
-    print(f"[SUKCES] Dane zapisano do: {filename}")
-    print("="*60)
+    df.to_csv("WBAN_Sensitivity_Results.csv", index=False)
+    print("\n[SUKCES] Dane zapisano do: WBAN_Sensitivity_Results.csv")
 
 if __name__ == "__main__":
-    run_experiment()
+    run_sensitivity_study()
